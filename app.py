@@ -1181,8 +1181,5 @@ submitted with the project.
 - Expected: Help page accessible and informative
 - Result: Passed
 
-### Testing Outcome Summary
-All major system components executed without crashes or unexpected warnings.
-Edge cases such as missing data and invalid inputs were handled gracefully.
 """
     )
