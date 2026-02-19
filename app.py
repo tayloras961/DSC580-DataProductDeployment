@@ -1,8 +1,3 @@
-# -----------------------
-# Taylor Shellow
-# DSC-580: Designing for Data Projects 
-# February 4, 2025 
-# -----------------------
 #
 ## Simple Health Analytics Data Product
 #
@@ -22,23 +17,20 @@
 # - Download the CSV template or sample CSV in the app
 # - Upload it using the file uploader
 # - Walk through Explore → Clean → Analyze → Visualize → Report → Testing
-
+#
+# Application State Note:
 # Due to the current local development configuration, some interface selections may reset
 # when navigating between pages or when the application refreshes. This behavior is related
 # to session state handling during development and will be resolved when the product is
 # deployed in a production environment.
-
+#
 # To ensure correct operation, users should follow the recommended workflow:
-
 # 1. Load data
 # 2. Explore data
 # 3. Apply cleaning if needed
 # 4. Run analysis
 # 5. Generate visualizations
 # 6. Create and download reports
-
-# Users are encouraged to complete tasks sequentially without refreshing the application
-# or reloading data during a session.
 #
 # Notes:
 # - CSV file upload is the primary input method
@@ -46,7 +38,7 @@
 # - The project is intentionally narrow in scope for academic purposes
 
 import datetime
-from io import StringIO
+from io import StringIO, BytesIO
 
 import numpy as np
 import pandas as pd
@@ -115,6 +107,13 @@ or reloading data during a session.
 # -----------------------
 # Utility functions
 # -----------------------
+def fig_to_png_bytes(fig) -> bytes:
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def dataset_signature_from_upload(uploaded_file) -> str:
     return f"upload::{uploaded_file.name}::{uploaded_file.size}"
 
@@ -135,6 +134,7 @@ def reset_for_new_dataset():
     reset_downstream_state()
 
     # Clear widget selections that depend on dataset columns
+    # NOTE: We intentionally do NOT clear height_inches (user preference)
     for k in [
         "clean_choice",
         "analysis_choice",
@@ -142,7 +142,7 @@ def reset_for_new_dataset():
         "vis_ycol",
         "vis_xcol",
         "vis_window",
-        "height_inches",
+        "exp_dist_col",
     ]:
         if k in st.session_state:
             del st.session_state[k]
@@ -337,7 +337,7 @@ def generate_basic_health_advice(df: pd.DataFrame, height_inches: int) -> str:
         sleep_avg = d["sleep_hours"].dropna().tail(7).mean()
         if not np.isnan(sleep_avg):
             if sleep_avg < 6.0:
-                advice.append("<p><b>Sleep:</b> Average sleep is low. Aim for 7–9 hours to support recovery.</p>")
+                advice.append("<p><b>Sleep:</b> Average sleep is low. Aim for 7 to 9 hours to support recovery.</p>")
             elif sleep_avg < 7.0:
                 advice.append("<p><b>Sleep:</b> Slightly below recommended range. Increasing sleep may help energy and appetite control.</p>")
             else:
@@ -348,7 +348,7 @@ def generate_basic_health_advice(df: pd.DataFrame, height_inches: int) -> str:
         steps_avg = d["steps"].dropna().tail(7).mean()
         if not np.isnan(steps_avg):
             if steps_avg < 5000:
-                advice.append("<p><b>Activity:</b> Low daily steps. Increasing movement reduces chronic disease risk.</p>")
+                advice.append("<p><b>Activity:</b> Low daily steps. Increasing movement can reduce long term health risks.</p>")
             elif steps_avg < 8000:
                 advice.append("<p><b>Activity:</b> Moderate activity. Additional movement could improve outcomes.</p>")
             else:
@@ -374,11 +374,12 @@ def generate_basic_health_advice(df: pd.DataFrame, height_inches: int) -> str:
 
     if risk_flags >= 2:
         advice.append(
-            "<p><b>Watch Zone:</b> Combined low activity, low sleep, and increasing weight can be associated with higher long-term health risks (e.g., type 2 diabetes and cardiovascular disease). Consider lifestyle adjustments or professional advice.</p>"
+            "<p><b>Watch Zone:</b> Combined low activity, low sleep, and increasing weight can be associated with higher long term health risks "
+            "(for example, type 2 diabetes and cardiovascular disease). Consider lifestyle adjustments or professional advice.</p>"
         )
     else:
         advice.append(
-            "<p><b>General Note:</b> Maintaining stable weight, good sleep, and regular activity supports long-term health.</p>"
+            "<p><b>General Note:</b> Maintaining stable weight, good sleep, and regular activity supports long term health.</p>"
         )
 
     return "".join(advice)
@@ -388,6 +389,7 @@ def build_html_report(run_info: dict) -> str:
     ts = run_info["timestamp"]
     prof = run_info["profile"]
     advice_html = run_info.get("advice_html", "")
+    interpretation = run_info.get("interpretation", "")
 
     return f"""
     <html>
@@ -437,8 +439,18 @@ def build_html_report(run_info: dict) -> str:
     </div>
 
     <div class="section">
+      <h2>Interpretation</h2>
+      <p>{interpretation}</p>
+    </div>
+
+    <div class="section">
       <h2>Health Guidance Summary (Non-Clinical)</h2>
       {advice_html}
+    </div>
+
+    <div class="section">
+      <h2>Disclaimer</h2>
+      <p>This report is for educational demonstration purposes only and is not medical advice.</p>
     </div>
 
     </body>
@@ -467,6 +479,9 @@ if "analysis_output" not in st.session_state:
     st.session_state.analysis_output = None
 if "data_signature" not in st.session_state:
     st.session_state.data_signature = None
+
+# Keep a default height value once (do not overwrite later)
+st.session_state.setdefault("height_inches", 67)
 
 
 # -----------------------
@@ -593,7 +608,7 @@ elif page == "Explore":
     c4.metric("Numeric cols", f"{p['numeric_cols']}")
     c5.metric("Date parsed", "Yes" if p["date_parsed"] else "No")
 
-    tabs = st.tabs(["Preview", "Column Types", "Missingness", "Summary Stats"])
+    tabs = st.tabs(["Preview", "Column Types", "Missingness", "Summary Stats", "Exploratory Visuals"])
 
     with tabs[0]:
         st.subheader("Preview (formatted)")
@@ -609,6 +624,22 @@ elif page == "Explore":
         miss = (df.isna().mean() * 100).round(2).sort_values(ascending=False)
         st.dataframe(miss.to_frame("missing_%"), use_container_width=True)
 
+        fig = plt.figure()
+        plt.bar(miss.index.astype(str), miss.values)
+        plt.title("Missing Values by Column (%)")
+        plt.xticks(rotation=45, ha="right")
+        plt.ylabel("Missing %")
+        plt.tight_layout()
+        st.pyplot(fig)
+
+        st.download_button(
+            "Download Missingness Plot (PNG)",
+            data=fig_to_png_bytes(fig),
+            file_name="missingness_plot.png",
+            mime="image/png",
+            key="dl_missingness_png"
+        )
+
     with tabs[3]:
         st.subheader("Summary statistics (numeric only)")
         num = df.select_dtypes(include=[np.number])
@@ -616,6 +647,56 @@ elif page == "Explore":
             st.warning("No numeric columns found.")
         else:
             st.dataframe(num.describe().T, use_container_width=True)
+
+    with tabs[4]:
+        st.subheader("Exploratory Visuals (Descriptive Statistics)")
+
+        num = df.select_dtypes(include=[np.number])
+        if num.shape[1] == 0:
+            st.warning("No numeric columns found for exploratory visuals.")
+        else:
+            # Choose a variable for distribution visuals
+            st.session_state.setdefault("exp_dist_col", num.columns.tolist()[0])
+            dist_col = st.selectbox(
+                "Select a numeric column to visualize",
+                num.columns.tolist(),
+                key="exp_dist_col"
+            )
+
+            colA, colB = st.columns(2)
+
+            with colA:
+                fig1 = plt.figure()
+                plt.hist(num[dist_col].dropna(), bins=25)
+                plt.title(f"Histogram: {dist_col}")
+                plt.xlabel(dist_col)
+                plt.ylabel("Count")
+                plt.tight_layout()
+                st.pyplot(fig1)
+
+                st.download_button(
+                    "Download Histogram (PNG)",
+                    data=fig_to_png_bytes(fig1),
+                    file_name=f"hist_{dist_col}.png",
+                    mime="image/png",
+                    key="dl_hist_png"
+                )
+
+            with colB:
+                fig2 = plt.figure()
+                plt.boxplot(num[dist_col].dropna(), vert=True)
+                plt.title(f"Boxplot: {dist_col}")
+                plt.ylabel(dist_col)
+                plt.tight_layout()
+                st.pyplot(fig2)
+
+                st.download_button(
+                    "Download Boxplot (PNG)",
+                    data=fig_to_png_bytes(fig2),
+                    file_name=f"box_{dist_col}.png",
+                    mime="image/png",
+                    key="dl_box_png"
+                )
 
 # -----------------------
 # Clean
@@ -763,6 +844,14 @@ elif page == "Analyze":
                 plt.tight_layout()
                 st.pyplot(fig)
 
+                st.download_button(
+                    "Download Risk Contribution Plot (PNG)",
+                    data=fig_to_png_bytes(fig),
+                    file_name="risk_contribution_plot.png",
+                    mime="image/png",
+                    key="dl_risk_plot_png"
+                )
+
 # -----------------------
 # Visualize
 # -----------------------
@@ -816,6 +905,14 @@ elif page == "Visualize":
             plt.tight_layout()
             st.pyplot(fig)
 
+            st.download_button(
+                "Download Plot (PNG)",
+                data=fig_to_png_bytes(fig),
+                file_name=f"timeseries_{y_col}.png",
+                mime="image/png",
+                key="dl_vis_timeseries_png"
+            )
+
     elif vis_type == "Histogram":
         fig = plt.figure()
         plt.hist(df[y_col].dropna(), bins=25)
@@ -824,6 +921,14 @@ elif page == "Visualize":
         plt.ylabel("Count")
         plt.tight_layout()
         st.pyplot(fig)
+
+        st.download_button(
+            "Download Plot (PNG)",
+            data=fig_to_png_bytes(fig),
+            file_name=f"hist_{y_col}.png",
+            mime="image/png",
+            key="dl_vis_hist_png"
+        )
 
     elif vis_type == "Scatterplot":
         choices = [c for c in num_cols if c != y_col]
@@ -843,6 +948,14 @@ elif page == "Visualize":
         plt.tight_layout()
         st.pyplot(fig)
 
+        st.download_button(
+            "Download Plot (PNG)",
+            data=fig_to_png_bytes(fig),
+            file_name=f"scatter_{y_col}_vs_{x_col}.png",
+            mime="image/png",
+            key="dl_vis_scatter_png"
+        )
+
     else:
         corr = corr_matrix(df)
         if corr is None:
@@ -856,6 +969,14 @@ elif page == "Visualize":
             plt.colorbar()
             plt.tight_layout()
             st.pyplot(fig)
+
+            st.download_button(
+                "Download Plot (PNG)",
+                data=fig_to_png_bytes(fig),
+                file_name="correlation_heatmap.png",
+                mime="image/png",
+                key="dl_vis_corr_png"
+            )
 
 # -----------------------
 # Report
@@ -874,35 +995,51 @@ elif page == "Report":
     analysis_output = st.session_state.analysis_output
 
     results_text = ""
+    interpretation = ""
     if analysis_output is None:
         results_text = "No analysis was run before report generation."
+        interpretation = "No analysis was selected, so the report only includes descriptive information and guidance based on the latest values."
     else:
         if analysis_output["type"] == "trend_table":
             results_text = analysis_output["data"].round(3).to_string(index=False)
+            interpretation = (
+                "Trend analysis summarizes direction and magnitude of change across numeric metrics. "
+                "This is useful for time-series health tracking because it highlights whether measures like weight, steps, "
+                "calories, or sleep are improving, stable, or declining over the observed period."
+            )
         elif analysis_output["type"] == "corr":
             if analysis_output["data"] is None:
                 results_text = "Correlation not available (need 2+ numeric columns)."
+                interpretation = "Correlation requires at least two numeric variables. Upload more numeric columns to evaluate relationships."
             else:
                 results_text = analysis_output["data"].round(3).to_string()
+                interpretation = (
+                    "Correlation analysis scans numeric variables for linear associations. "
+                    "This helps identify relationships such as higher activity aligning with lower weight or improved sleep patterns. "
+                    "It is exploratory and does not imply causation."
+                )
         else:
             risk = analysis_output["data"]
             results_text = f"Risk category: {risk['category']}\nRisk score: {risk['score']}\n"
             results_text += "Contributions:\n"
             for k, v in risk["reasons"].items():
                 results_text += f"- {k}: {v}\n"
+            interpretation = (
+                "The risk score is a non-clinical, rule-based indicator that flags patterns such as low activity, low sleep, "
+                "and sustained weight increases. It is intended to support awareness and behavior tracking, not diagnosis."
+            )
 
     st.subheader("Personalization (for BMI estimate)")
-    if "height_inches" not in st.session_state:
-        st.session_state.height_inches = 67
 
-    height_inches = st.number_input(
+    # Keep the widget state stable by using key only (no value override)
+    st.number_input(
         "Height (inches)",
         min_value=48,
         max_value=84,
-        value=int(st.session_state.height_inches),
         step=1,
         key="height_inches"
     )
+    height_inches = int(st.session_state["height_inches"])
 
     advice_html = generate_basic_health_advice(df, height_inches)
 
@@ -912,6 +1049,7 @@ elif page == "Report":
         "clean_method": clean_method,
         "analysis_method": st.session_state.analysis_method,
         "analysis_results_text": results_text,
+        "interpretation": interpretation,
         "advice_html": advice_html
     }
 
@@ -966,19 +1104,20 @@ Minimum requirement:
 - Download a template or sample CSV to test.
 
 **Explore**
-- Review dataset profile, missingness, data types, and summary statistics.
+- Review dataset profile, missingness, data types, summary statistics, and exploratory visuals.
 
 **Clean**
 - Apply one cleaning/preprocessing method at a time and confirm changes in the preview.
 
 **Analyze**
-- Trend summary: first vs last + percent change
-- Correlation scan: relationships between numeric variables
+- Trend summary: change across key metrics over time
+- Correlation scan: exploratory associations between variables
 - Simple risk score: rule-based, non-clinical indicator + contribution breakdown
 
 **Visualize**
 - Trend chart with rolling average (requires date column)
 - Histogram, scatterplot, correlation heatmap
+- Download plots as PNG for documentation and sharing
 
 **Report**
 - Downloads an HTML report and cleaned CSV output.
@@ -1023,7 +1162,7 @@ submitted with the project.
 - Result: Passed
 
 **T5 – Visualization**
-- Expected: Charts render without errors for numeric data
+- Expected: Charts render without errors for numeric data and plots can be downloaded as PNG
 - Result: Passed
 
 **T6 – Analysis Methods**
